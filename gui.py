@@ -6,6 +6,8 @@ import time
 import sys
 import os
 import PIL.Image
+import math
+
 from PIL.ExifTags import TAGS, GPSTAGS
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
@@ -21,6 +23,7 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 from math import radians, cos, sin, asin, sqrt
 
+Image.MAX_IMAGE_PIXELS = None
 
 # Define the selected directory path
 selected_directory = None
@@ -41,23 +44,27 @@ def run_rename_script():
             if exif is not None:
                 for (tag,value) in exif.items():
                     tag_name = TAGS.get(tag, tag)
-                    if tag_name == 'DateTimeOriginal':
-                        return value
-                    if tag_name == 'DateTimeDigitized':
-                        return value
-                    if tag_name == 'DateTime':
-                        return value
+                    if tag_name in ('DateTimeOriginal', 'DateTimeDigitized', 'DateTime'):
+                        # Validate date format
+                        try:
+                            datetime.datetime.strptime(value.split(' ')[0], "%Y:%m:%d")
+                            return value
+                        except ValueError:
+                            return "dateerror"
         except PIL.UnidentifiedImageError:
-            print(f"Could not open image file: {file_path}")
+            os.remove(file_path)
         return None
 
     def get_video_creation_date(file_path):
-        probe = ffmpeg.probe(file_path)
-        metadata = probe['streams'][0]['tags']
-        if 'creation_time' in metadata:
-            creation_date = metadata['creation_time']
-            creation_date = creation_date.split('T')[0]  # This line extracts only the date (year, month, day) from the video file metadata
-            return creation_date
+        try:
+            probe = ffmpeg.probe(file_path)
+            metadata = probe['streams'][0]['tags']
+            if 'creation_time' in metadata:
+                creation_date = metadata['creation_time']
+                creation_date = creation_date.split('T')[0]  # This line extracts only the date (year, month, day) from the video file metadata
+                return creation_date
+        except (ffmpeg.Error, IndexError, KeyError):
+            print(f"Unable to extract video creation date from the file at {file_path}. It might be corrupted.")
         return None
 
     def get_highest_suffix(similar_files):
@@ -90,9 +97,11 @@ def run_rename_script():
             new_base_name = filename + " - no exif"
         elif creation_date is None:
             new_base_name = filename + " - exif error"
+        elif creation_date == "dateerror":
+            new_base_name = filename + " - exif date error"
         else:
             creation_date = creation_date.split(' ')[0]  # This line extracts only the date (year, month, day) from the image file metadata
-            new_base_name = creation_date.replace(':', '-')
+            new_base_name = creation_date.replace(':', '-').replace('/', '_').replace(',', ' ')
         
         suffix = "_vid" if is_video else "_pic"
         similar_files = [name for name in os.listdir(directory) if name.startswith(new_base_name + suffix)]
@@ -111,7 +120,10 @@ def run_rename_script():
             print(f"File {new_file_path} already exists, skipping...")
             return
 
-        os.rename(file_path, new_file_path)
+        try:
+            os.rename(file_path, new_file_path)
+        except FileNotFoundError:
+            pass
 
 
     def rename_files_in_dir(dir_path):
@@ -306,8 +318,11 @@ def run_process_script(radius):
                         lon_data = gps_info['GPSLongitude']
                         lat = convert_to_degress(lat_data)
                         lon = convert_to_degress(lon_data)
-                        files_with_gps[os.path.join(dirpath, file)] = (lat, lon)
-                        gps_coords.append([lat, lon])
+                        
+                        if not math.isnan(lat) and not math.isnan(lon):
+                            files_with_gps[os.path.join(dirpath, file)] = (lat, lon)
+                            gps_coords.append([lat, lon])    
+                        
             except IOError as e:
                 pass
             except Exception as e:
@@ -410,6 +425,10 @@ def show_confirmation_dialog(title, message):
 def on_close():
     root.destroy()
 
+current_folder = os.getcwd()
+print("Current folder location where program runs:", current_folder)
+print("ffmpeg is called in ../build/ffmpeg/bin")
+
 # Set the default radius value
 radius = 0.2
 
@@ -502,4 +521,3 @@ directory_label.place(x=310, y=135)
 # Start the GUI event loop
 root.protocol("WM_DELETE_WINDOW", on_close)
 root.mainloop()
-
